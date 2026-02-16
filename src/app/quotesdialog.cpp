@@ -19,6 +19,7 @@ QuoteItem::QuoteItem(const QString &text, bool unlocked, QWidget *parent)
     auto *layout = new QHBoxLayout(this);
     layout->setContentsMargins(15, 10, 15, 10);
 
+    // Круглый значок в виде зелёной галочки для открытых цитат и серого знака вопроса для закрытых
     auto *iconLabel = new QLabel(this);
     iconLabel->setFixedSize(36, 36);
     iconLabel->setAlignment(Qt::AlignCenter);
@@ -32,6 +33,7 @@ QuoteItem::QuoteItem(const QString &text, bool unlocked, QWidget *parent)
         iconLabel->setStyleSheet("QLabel { color: white; background-color: #95a5a6; border-radius: 18px; }");
     }
 
+    // Текст цитаты или заглушка не открыта для закрытых позиций
     auto *textLabel = new QLabel(unlocked ? text : "🔒 Эта цитата ещё не открыта", this);
     textLabel->setWordWrap(true);
     textLabel->setFont(QFont("Sans", 12));
@@ -45,6 +47,7 @@ QuoteItem::QuoteItem(const QString &text, bool unlocked, QWidget *parent)
     layout->addStretch();
 }
 
+// Переопределяем paintEvent, чтобы QSS-стили корректно применялись к кастомному QWidget
 void QuoteItem::paintEvent(QPaintEvent *event)
 {
     Q_UNUSED(event);
@@ -68,6 +71,7 @@ void QuotesDialog::setupUI(const QList<QPair<QString, bool>> &quotes)
     mainLayout->setSpacing(12);
     mainLayout->setContentsMargins(15, 15, 15, 15);
 
+    // Шапка с прогрессом, то есть сколько цитат уже открыто из общего числа
     m_progressLabel = new QLabel(this);
     m_progressLabel->setAlignment(Qt::AlignCenter);
     m_progressLabel->setFont(QFont("Sans", 18, QFont::Bold));
@@ -77,6 +81,7 @@ void QuotesDialog::setupUI(const QList<QPair<QString, bool>> &quotes)
                                  .arg(unlocked).arg(quotes.size()));
     m_progressLabel->setStyleSheet("QLabel { color: #2980b9; padding: 8px; background-color: #e3f2fd; border-radius: 6px; }");
 
+    // Прокручиваемый список всех цитат
     auto *scrollArea = new QScrollArea(this);
     scrollArea->setWidgetResizable(true);
     scrollArea->setFrameShape(QFrame::NoFrame);
@@ -87,6 +92,7 @@ void QuotesDialog::setupUI(const QList<QPair<QString, bool>> &quotes)
     scrollLayout->setContentsMargins(0, 0, 0, 0);
 
     for (int i = 0; i < quotes.size(); ++i) {
+        // Нумеруем цитату для удобства навигации по коллекции
         QString displayText = QString("%1. %2").arg(i + 1).arg(quotes[i].first);
         auto *item = new QuoteItem(displayText, quotes[i].second);
         scrollLayout->addWidget(item);
@@ -95,6 +101,7 @@ void QuotesDialog::setupUI(const QList<QPair<QString, bool>> &quotes)
     scrollWidget->setLayout(scrollLayout);
     scrollArea->setWidget(scrollWidget);
 
+    // Подсказка с процентом прохождения коллекции
     auto *statsLabel = new QLabel(this);
     statsLabel->setWordWrap(true);
     statsLabel->setAlignment(Qt::AlignCenter);

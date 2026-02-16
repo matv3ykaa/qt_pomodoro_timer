@@ -22,20 +22,23 @@ Antiprocrastinator::Antiprocrastinator(QWidget *parent)
     : QMainWindow(parent)
     , m_timer(new QTimer(this))
 {
+    // Загружаем настройки из .env-файла
     loadEnvironmentConfig();
 
+    // Инициализируем бд для хранения сессий и настроек
     if (!initDatabase()) {
         QMessageBox::critical(this, "Ошибка базы данных",
                               "Не удалось инициализировать базу данных прогресса.\n"
                               "Приложение будет работать в режиме только для чтения.");
     }
 
-    loadQuotes();
-    setupUI();
-    setupMenuBar();
-    loadProgress();
+    loadQuotes();      // Читаем цитаты из файла
+    setupUI();         // Собираем виджеты главного окна
+    setupMenuBar();    // Добавляем меню
+    loadProgress();    // Восстанавливаем прогресс из бд
     applyTheme(m_defaultTheme);
 
+    // Таймер срабатывает каждую секунду и обновляет отсчёт
     m_timer->setInterval(1000);
     connect(m_timer, &QTimer::timeout, this, &Antiprocrastinator::updateDisplay);
     connect(m_startButton, &QPushButton::clicked, this, &Antiprocrastinator::startTimer);
@@ -51,6 +54,7 @@ Antiprocrastinator::Antiprocrastinator(QWidget *parent)
 
 Antiprocrastinator::~Antiprocrastinator()
 {
+    // Сохраняем текущие настройки перед выходом и закрываем соединение с бд
     saveProgress();
     if (m_db.isOpen()) {
         m_db.close();
@@ -60,6 +64,7 @@ Antiprocrastinator::~Antiprocrastinator()
 
 void Antiprocrastinator::loadEnvironmentConfig()
 {
+    // Ищем .env-файл рядом с исполняемым файлом или в текущей директории
     QStringList searchPaths = {
         QApplication::applicationDirPath(),
         QApplication::applicationDirPath() + "/..",
@@ -75,6 +80,7 @@ void Antiprocrastinator::loadEnvironmentConfig()
         }
     }
 
+    // Значения по умолчанию используются, если .env не найден или не содержит нужного ключа
     m_quotesFilePath = "quotes.txt";
     m_defaultTheme = "light";
     m_defaultDuration = 25;
@@ -89,13 +95,16 @@ void Antiprocrastinator::loadEnvironmentConfig()
 
             while (!in.atEnd()) {
                 QString line = in.readLine().trimmed();
+                // Пропускаем пустые строки и комментарии
                 if (line.isEmpty() || line.startsWith("#")) continue;
 
+                // Разбираем строки вида КЛЮЧ=ЗНАЧЕНИЕ
                 QRegularExpression re(R"(^\s*(\w+)\s*=\s*(.+?)\s*$)");
                 QRegularExpressionMatch match = re.match(line);
                 if (match.hasMatch()) {
                     QString key = match.captured(1);
                     QString value = match.captured(2).trimmed();
+                    // Убираем обрамляющие кавычки, если они есть
                     if (value.startsWith("\"") && value.endsWith("\"")) {
                         value = value.mid(1, value.length() - 2);
                     }
@@ -103,16 +112,19 @@ void Antiprocrastinator::loadEnvironmentConfig()
                         value = value.mid(1, value.length() - 2);
                     }
 
-                    if (key == "QUOTES_FILE_PATH") m_quotesFilePath = value;
+                    // fromNativeSeparators заменяет обратные слеши (Windows) на прямые,
+                    // чтобы пути из .env корректно работали на macOS и Linux
+                    if (key == "QUOTES_FILE_PATH") m_quotesFilePath = QDir::fromNativeSeparators(value);
                     else if (key == "DEFAULT_DURATION") m_defaultDuration = value.toInt();
                     else if (key == "DEFAULT_THEME") m_defaultTheme = value;
-                    else if (key == "DB_PATH") m_dbPath = value;
+                    else if (key == "DB_PATH") m_dbPath = QDir::fromNativeSeparators(value);
                 }
             }
             file.close();
         }
     }
 
+    // Создаём директорию для бд заранее, чтобы SQLite не упал при открытии
     QFileInfo dbFileInfo(m_dbPath);
     if (!dbFileInfo.dir().exists()) {
         dbFileInfo.dir().mkpath(".");
@@ -121,6 +133,7 @@ void Antiprocrastinator::loadEnvironmentConfig()
 
 bool Antiprocrastinator::initDatabase()
 {
+    // Удаляем старое соединение, если оно осталось от предыдущего запуска
     if (QSqlDatabase::contains("progress_db")) {
         QSqlDatabase::removeDatabase("progress_db");
     }
@@ -134,6 +147,8 @@ bool Antiprocrastinator::initDatabase()
     }
 
     QSqlQuery query(m_db);
+
+    // Таблица sessions хранит каждую завершённую помодоро-сессию
     if (!query.exec(R"(
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,6 +160,7 @@ bool Antiprocrastinator::initDatabase()
         return false;
     }
 
+    // Таблица settings хранит пользовательские предпочтения
     if (!query.exec(R"(
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -155,6 +171,7 @@ bool Antiprocrastinator::initDatabase()
         return false;
     }
 
+    // Вставляем начальные значения, только если записей ещё нет (INSERT OR IGNORE)
     query.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (:key, :value)");
     query.bindValue(":key", "theme");
     query.bindValue(":value", m_defaultTheme);
@@ -170,41 +187,50 @@ bool Antiprocrastinator::initDatabase()
 
 void Antiprocrastinator::loadQuotes()
 {
-    QStringList searchPaths = {
-        QApplication::applicationDirPath(),
-        QApplication::applicationDirPath() + "/../share/antiprocrastinator",
-        QApplication::applicationDirPath() + "/../../share/antiprocrastinator",
-        QDir::currentPath()
+    const QStringList fallback = {
+        "Ты ближе к цели, чем вчера!",
+        "Один шаг за раз — и горы сдвинутся.",
+        "Прокрастинация — враг мечты. Ты сегодня её победил!",
+        "25 минут усилий = час гордости за себя.",
+        "Не идеально, но сделано — лучше чем идеально, но не сделано.",
+        "Ты уже сделал больше, чем тот, кто даже не начал.",
+        "Маленькие шаги ведут к большим результатам.",
+        "Сегодняшняя дисциплина — завтрашняя свобода.",
+        "Ты сильнее прокрастинации!",
+        "Каждая минута продуктивности — инвестиция в будущее себя."
     };
 
+    // Строим список кандидатов на путь к файлу цитат.
+    // Каждый candidate это уже готовый абсолютный путь к файлу, без двойных склеиваний.
+    QStringList candidates;
+
     if (QFileInfo(m_quotesFilePath).isAbsolute()) {
-        searchPaths.prepend(m_quotesFilePath);
+        // Путь из .env абсолютный, то используем как есть
+        candidates << m_quotesFilePath;
     } else {
-        searchPaths.prepend(QApplication::applicationDirPath() + "/" + m_quotesFilePath);
+        // Путь относительный, поэтому ищем рядом с исполняемым файлом.
+        // QDir::cleanPath убирает лишние слеши и нормализует путь.
+        candidates << QDir::cleanPath(QApplication::applicationDirPath() + "/" + m_quotesFilePath);
+    }
+
+    // Выводим в лог проверяемые пути
+    for (const QString &c : candidates) {
+        qDebug() << "Ищу файл цитат:" << c;
     }
 
     QString quotesFile;
-    for (const QString &path : searchPaths) {
-        QString candidate = QFileInfo(path).isAbsolute() ? path : (QApplication::applicationDirPath() + "/" + path);
-        if (QFile::exists(candidate)) {
+    for (const QString &candidate : candidates) {
+        QFileInfo info(candidate);
+        // Убеждаемся, что это именно файл, а не директория
+        if (info.exists() && info.isFile()) {
             quotesFile = candidate;
             break;
         }
     }
 
+    // Если файл так и не нашли, то используем встроенный запасной набор цитат
     if (quotesFile.isEmpty()) {
-        m_allQuotes = {
-            "Ты ближе к цели, чем вчера!",
-            "Один шаг за раз — и горы сдвинутся.",
-            "Прокрастинация — враг мечты. Ты сегодня её победил!",
-            "25 минут усилий = час гордости за себя.",
-            "Не идеально, но сделано — лучше чем идеально, но не сделано.",
-            "Ты уже сделал больше, чем тот, кто даже не начал.",
-            "Маленькие шаги ведут к большим результатам.",
-            "Сегодняшняя дисциплина — завтрашняя свобода.",
-            "Ты сильнее прокрастинации!",
-            "Каждая минута продуктивности — инвестиция в будущее себя."
-        };
+        m_allQuotes = fallback;
         qWarning() << "Файл цитат не найден, используются встроенные фразы";
         return;
     }
@@ -216,6 +242,7 @@ void Antiprocrastinator::loadQuotes()
 
         while (!in.atEnd()) {
             QString line = in.readLine().trimmed();
+            // Пропускаем пустые строки и строки-комментарии
             if (!line.isEmpty() && !line.startsWith("#")) {
                 m_allQuotes.append(line);
             }
@@ -224,23 +251,13 @@ void Antiprocrastinator::loadQuotes()
         qDebug() << "Загружено цитат:" << m_allQuotes.size();
     } else {
         qWarning() << "Ошибка чтения файла цитат:" << quotesFile;
-        m_allQuotes = {
-            "Ты ближе к цели, чем вчера!",
-            "Один шаг за раз — и горы сдвинутся.",
-            "Прокрастинация — враг мечты. Ты сегодня её победил!",
-            "25 минут усилий = час гордости за себя.",
-            "Не идеально, но сделано — лучше чем идеально, но не сделано.",
-            "Ты уже сделал больше, чем тот, кто даже не начал.",
-            "Маленькие шаги ведут к большим результатам.",
-            "Сегодняшняя дисциплина — завтрашняя свобода.",
-            "Ты сильнее прокрастинации!",
-            "Каждая минута продуктивности — инвестиция в будущее себя."
-        };
+        m_allQuotes = fallback;
     }
 }
 
 void Antiprocrastinator::loadProgress()
 {
+    // Если БД недоступна, то начинаем с нуля, без сохранения
     if (!m_db.isOpen()) {
         m_sessionsCompleted = 0;
         m_pomodoroMinutes = m_defaultDuration;
@@ -252,6 +269,7 @@ void Antiprocrastinator::loadProgress()
         return;
     }
 
+    // Считаем общее количество завершённых сессий
     QSqlQuery query(m_db);
     if (query.exec("SELECT COUNT(*) FROM sessions") && query.next()) {
         m_sessionsCompleted = query.value(0).toInt();
@@ -259,6 +277,7 @@ void Antiprocrastinator::loadProgress()
         m_sessionsCompleted = 0;
     }
 
+    // Восстанавливаем сохранённые настройки темы и длительности
     query.prepare("SELECT value FROM settings WHERE key = 'theme'");
     if (query.exec() && query.next()) {
         m_defaultTheme = query.value(0).toString();
@@ -275,8 +294,10 @@ void Antiprocrastinator::loadProgress()
         m_pomodoroMinutes = m_defaultDuration;
     }
 
+    // Количество открытых цитат = количеству завершённых сессий, но не больше числа цитат
     m_unlockedCount = qMin(m_sessionsCompleted, m_allQuotes.size());
 
+    // Помечаем первые m_unlockedCount цитат как открытые
     m_quotesWithStatus.clear();
     for (int i = 0; i < m_allQuotes.size(); ++i) {
         bool unlocked = (i < m_unlockedCount);
@@ -286,6 +307,7 @@ void Antiprocrastinator::loadProgress()
     m_sessionCounterLabel->setText(QString("Сессий завершено: %1").arg(m_sessionsCompleted));
     m_durationSpinBox->setValue(m_pomodoroMinutes);
 
+    // Показываем последнюю открытую цитату, либо приглашение начать
     if (m_unlockedCount > 0) {
         m_quoteLabel->setText(QString("❝%1❞").arg(m_quotesWithStatus[m_unlockedCount - 1].first));
     } else {
@@ -301,6 +323,7 @@ void Antiprocrastinator::saveProgress()
 {
     if (!m_db.isOpen()) return;
 
+    // Оборачиваем оба UPDATE в транзакцию, чтобы настройки сохранялись атомарно
     m_db.transaction();
 
     QSqlQuery query(m_db);
@@ -329,6 +352,7 @@ void Antiprocrastinator::setupUI()
     QWidget *centralWidget = new QWidget(this);
     setCentralWidget(centralWidget);
 
+    // Большой таймер по центру
     m_timeLabel = new QLabel("25:00", centralWidget);
     m_timeLabel->setAlignment(Qt::AlignCenter);
     m_timeLabel->setStyleSheet("QLabel { font-size: 72px; font-weight: bold; margin: 10px 0; }");
@@ -337,6 +361,7 @@ void Antiprocrastinator::setupUI()
     m_sessionCounterLabel->setAlignment(Qt::AlignCenter);
     m_sessionCounterLabel->setStyleSheet("QLabel { font-size: 18px; color: #3498db; margin-bottom: 15px; }");
 
+    // Область для отображения мотивационных цитат
     m_quoteLabel = new QLabel("🍅 Начни первую сессию, чтобы открыть цитату!", centralWidget);
     m_quoteLabel->setAlignment(Qt::AlignCenter);
     m_quoteLabel->setWordWrap(true);
@@ -346,6 +371,7 @@ void Antiprocrastinator::setupUI()
     m_startButton = new QPushButton("▶️ Старт", centralWidget);
     m_pauseButton = new QPushButton("⏸ Пауза", centralWidget);
     m_resetButton = new QPushButton("↻ Сброс", centralWidget);
+    // Пауза недоступна, пока таймер не запущен
     m_pauseButton->setEnabled(false);
 
     QHBoxLayout *buttonLayout = new QHBoxLayout();
@@ -387,6 +413,7 @@ void Antiprocrastinator::setupMenuBar()
     QMenuBar *menuBar = new QMenuBar(this);
     setMenuBar(menuBar);
 
+    // Меню для просмотра коллекции открытых цитат
     QMenu *quotesMenu = menuBar->addMenu("📚 Цитаты");
     QAction *viewCollectionAction = new QAction("Моя коллекция...", this);
     connect(viewCollectionAction, &QAction::triggered, this, &Antiprocrastinator::showQuotesCollection);
@@ -409,6 +436,7 @@ void Antiprocrastinator::applyTheme(const QString &themeName)
 {
     QPalette palette;
     if (themeName == "dark") {
+        // В тёмной теме тёмно-серый фон и светлый текст
         palette.setColor(QPalette::Window, QColor(53, 53, 53));
         palette.setColor(QPalette::WindowText, Qt::white);
         palette.setColor(QPalette::Base, QColor(35, 35, 35));
@@ -426,6 +454,7 @@ void Antiprocrastinator::applyTheme(const QString &themeName)
         m_sessionCounterLabel->setStyleSheet("QLabel { font-size: 18px; color: #64b5f6; margin-bottom: 15px; }");
         m_quoteLabel->setStyleSheet("QLabel { font-size: 16px; font-style: italic; color: #b0bec5; padding: 10px; min-height: 70px; }");
     } else {
+        // В светлой теме ветло-серый фон и тёмный текст
         palette.setColor(QPalette::Window, QColor(245, 247, 250));
         palette.setColor(QPalette::WindowText, QColor(44, 62, 80));
         palette.setColor(QPalette::Base, Qt::white);
@@ -456,6 +485,7 @@ void Antiprocrastinator::applyTheme(const QString &themeName)
 void Antiprocrastinator::startTimer()
 {
     if (!m_isRunning) {
+        // Если время уже вышло, то начинаем заново с полной длительности
         if (m_remainingTime <= QTime(0, 0, 0)) {
             m_remainingTime = QTime(0, m_pomodoroMinutes, 0);
         }
@@ -464,6 +494,7 @@ void Antiprocrastinator::startTimer()
         m_startButton->setEnabled(false);
         m_pauseButton->setEnabled(true);
         m_startButton->setText("▶️ В работе...");
+        // Блокируем изменение длительности во время активной сессии
         m_durationSpinBox->setEnabled(false);
     }
 }
@@ -496,12 +527,14 @@ void Antiprocrastinator::updateDisplay()
 {
     if (m_isRunning) {
         m_remainingTime = m_remainingTime.addSecs(-1);
+        // Если время истекло, то фиксируем завершение сессии
         if (m_remainingTime <= QTime(0, 0, 0)) {
             timerFinished();
             return;
         }
     }
 
+    // Форматируем как MM:SS с ведущими нулями
     QString timeText = QString("%1:%2")
                            .arg(m_remainingTime.minute(), 2, 10, QChar('0'))
                            .arg(m_remainingTime.second(), 2, 10, QChar('0'));
@@ -515,6 +548,7 @@ void Antiprocrastinator::timerFinished()
     m_isRunning = false;
 
     if (m_db.isOpen()) {
+        // Записываем сессию в бд в рамках транзакции
         m_db.transaction();
 
         QSqlQuery query(m_db);
@@ -529,6 +563,7 @@ void Antiprocrastinator::timerFinished()
         m_sessionsCompleted++;
         m_sessionCounterLabel->setText(QString("Сессий завершено: %1").arg(m_sessionsCompleted));
 
+        // Открываем следующую цитату, если в коллекции ещё есть закрытые
         if (m_unlockedCount < m_allQuotes.size()) {
             m_quotesWithStatus[m_unlockedCount].second = true;
             m_unlockedCount++;
@@ -541,6 +576,7 @@ void Antiprocrastinator::timerFinished()
 
         qDebug() << "Сессия сохранена, открыта цитата #" << m_unlockedCount;
     } else {
+        // Если бд недоступна, то обновляем только оперативное состояние
         m_sessionsCompleted++;
         m_sessionCounterLabel->setText(QString("Сессий завершено: %1").arg(m_sessionsCompleted));
         if (m_unlockedCount < m_allQuotes.size()) {
@@ -551,6 +587,7 @@ void Antiprocrastinator::timerFinished()
 
     showMotivationalQuote();
 
+    // Сбрасываем таймер на следующий круг
     m_remainingTime = QTime(0, m_pomodoroMinutes, 0);
     updateDisplay();
     m_startButton->setEnabled(true);
@@ -567,6 +604,7 @@ void Antiprocrastinator::showMotivationalQuote()
 
     QString quote = m_quotesWithStatus[m_unlockedCount - 1].first;
 
+    // Сначала показываем анимированное вспыхивание, а потом уже через таймеры саму цитату
     m_quoteLabel->setText("✨ Открыта новая цитата!");
     m_quoteLabel->setStyleSheet(
         "QLabel { font-size: 18px; font-weight: bold; color: #e67e22; "
@@ -575,6 +613,7 @@ void Antiprocrastinator::showMotivationalQuote()
 
     QTimer::singleShot(1200, this, [this, quote]() {
         m_quoteLabel->setText(QString("❝%1❞").arg(quote));
+        // Выбираем стиль подсветки в зависимости от текущей темы
         QString style = qApp->palette().color(QPalette::Base).lightness() < 128 ?
                             "QLabel { font-size: 18px; font-weight: bold; font-style: italic; color: #64b5f6; "
                             "background-color: #2a3b4d; border-radius: 8px; padding: 10px; }" :
@@ -582,6 +621,7 @@ void Antiprocrastinator::showMotivationalQuote()
                             "background-color: #e8f5e9; border-radius: 8px; padding: 10px; }";
         m_quoteLabel->setStyleSheet(style);
 
+        // Убираем выделение и возвращаем обычный вид через 2 с половиной секунды
         QTimer::singleShot(2500, this, [this]() {
             QString normalStyle = qApp->palette().color(QPalette::Base).lightness() < 128 ?
                                       "QLabel { font-size: 16px; font-style: italic; color: #b0bec5; padding: 10px; min-height: 70px; }" :
@@ -590,6 +630,7 @@ void Antiprocrastinator::showMotivationalQuote()
         });
     });
 
+    // Показываем модальный диалог с итогами сессии и новой цитатой
     QMessageBox msgBox(this);
     msgBox.setWindowTitle("🏆 Цитата открыта!");
     msgBox.setText(QString("Ты завершил %1 сессий и открыл %2 из %3 цитат!")
@@ -614,12 +655,14 @@ void Antiprocrastinator::changeTheme(int index)
     Q_UNUSED(index);
     QString theme = m_themeComboBox->currentData().toString();
     applyTheme(theme);
+    // Сразу сохраняем выбор темы, чтобы он пережил перезапуск
     saveProgress();
 }
 
 void Antiprocrastinator::changeDuration(int minutes)
 {
     m_pomodoroMinutes = minutes;
+    // Обновляем отображение только если таймер сейчас не идёт
     if (!m_isRunning) {
         m_remainingTime = QTime(0, minutes, 0);
         updateDisplay();

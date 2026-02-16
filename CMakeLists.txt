@@ -15,9 +15,10 @@ add_executable(antiprocrastinator
     src/app/antiprocrastinator.cpp
     src/headers/quotesdialog.h
     src/app/quotesdialog.cpp
+
+    .env
     quotes/quotes.txt
     .env
-    .env.example
 )
 
 target_link_libraries(antiprocrastinator PRIVATE
@@ -28,5 +29,5 @@ target_link_libraries(antiprocrastinator PRIVATE
 )
 
 # Копируем ресурсы в директорию сборки
-configure_file(quotes/quotes.txt ${CMAKE_CURRENT_BINARY_DIR}/quotes.txt COPYONLY)
+configure_file(quotes/quotes.txt ${CMAKE_CURRENT_BINARY_DIR}/quotes/quotes.txt COPYONLY)
 configure_file(.env ${CMAKE_CURRENT_BINARY_DIR}/.env COPYONLY)
